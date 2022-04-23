@@ -653,3 +653,126 @@ def gradient(phi,dx):
     g3[-1,:,:]=(phi[-1,:,:]-phi[-2,:,:])/dx[2]
 
     return g1,g2,g3
+
+def select_phase(temperature,density,phase='warm'):
+    '''
+        Select gas phase (setting density[~phase]=0)
+
+        phase=['whole','warm','cold','2p','lowd']
+
+    '''
+    T1=5050.
+    T2=2.e4
+    dmax=50
+    if phase == 'whole':
+        return density
+    elif phase == 'warm':
+        idx = (temperature < T1) | (temperature > T2)
+    elif phase == 'cold':
+        idx = (temperature >= T1)
+    elif phase == '2p':
+        idx = (temperature > T2)
+    elif phase == 'lowd':
+        idx = (temperature > T2) | (density > dmax)
+    else:
+        print("{} is not supported".format(phase))
+        return -1
+
+    dnew = np.copy(density)
+    dnew[idx] = 0.0
+
+    return dnew
+
+def setup_domain(fname, purpose='HI', shear=0):
+    '''
+        Setting up domain information for the data reader
+        fields= [density, magnetic_field] for synthetic dust polarization
+            or  [density, velocity, temperature] for synthetic HI 21cm line
+
+        Inputs
+        ------
+        fname: string
+            vtk data dump file name
+
+        Outputs
+        -------
+        ds: AthenaDataSet (pyathena class)
+
+        domain: AthenaDomain (pyathena class)
+
+        Parameters
+        ----------
+        purpose: string
+            [dustpol, HI]
+            set relevant data field names for type of synthetic observations
+
+        shear: float
+            shear frequency (km/s/kpc): S = q Omega = 28 for TIGRESS solar nbhd.
+    '''
+    dir, id, step, ext, mpi = parse_filename(fname)
+    ds=AthenaDataSet(fname)
+
+    domain=ds.domain
+    fields=['density']
+    if purpose == 'HI':
+        fields.append('temperature')
+        fields.append('velocity1')
+        fields.append('velocity2')
+        fields.append('velocity3')
+    elif purpose == 'dustpol':
+        fields.append('magnetic_field1')
+        fields.append('magnetic_field2')
+        fields.append('magnetic_field3')
+    else:
+        raise ValueError('purpose={} is not supported'.format(purpose))
+
+    domain['fields']=fields
+    domain['shear']=shear
+    domain['step']=step
+
+    return ds,domain
+
+
+def read_data(ds,field,domain,vy0_subtract=False):
+    '''
+        Wrapper for an Athena vtk output reader (pyathena)
+
+        Inputs
+        ------
+        ds: AthenaDataSet (pyathena class)
+
+        field: string
+            name of the data field to be read
+
+        domain: AthenaDomain (pyathena class)
+            domain information (including shear information)
+
+
+        Parameters
+        ----------
+        vy0_substract: bool
+            if True, background shear velocity will be subtracted
+    '''
+    if field == 'temperature':
+        data=coolftn.get_temp(ds.read_all_data('T1'))
+    elif field == 'velocity2':
+        data = ds.read_all_data(field)
+        if vy0_subtract:
+            r3d,x3d,y3d,z3d=pos3d(domain)
+            vy0=-domain['shear']*x3d
+            data -= vy0
+    else:
+        data = ds.read_all_data(field)
+
+    return data
+
+def xyz_coord(domain):
+    Nx = domain['Nx']
+    le = domain['left_edge']
+    re = domain['right_edge']
+    cc = []
+    for Nx_, le_, re_ in zip(Nx,le,re):
+        xfc = np.linspace(le_,re_,Nx_+1) # face centered positions (Nx+1)
+        xcc = 0.5*(xfc[1:]+xfc[:-1]) # cell centered positions
+        cc.append(xcc)
+    return cc
